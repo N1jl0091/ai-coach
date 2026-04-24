@@ -1,44 +1,125 @@
 from fastapi import APIRouter, Request
 import requests
+import os
 
 from app.db.database import get_connection
 
 router = APIRouter()
 
+# ---- CONFIG ----
+CLIENT_ID = os.getenv("STRAVA_CLIENT_ID")
+CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
+REDIRECT_URI = "https://ai-coach-production-06db.up.railway.app/strava/callback"
 
-# ---- WEBHOOK VERIFICATION (GET) ----
+
+# =========================
+# STRAVA OAUTH
+# =========================
+
+@router.get("/strava/login")
+def login():
+    return {
+        "url": (
+            f"https://www.strava.com/oauth/authorize"
+            f"?client_id={CLIENT_ID}"
+            f"&response_type=code"
+            f"&redirect_uri={REDIRECT_URI}"
+            f"&approval_prompt=force"
+            f"&scope=read,activity:read"
+        )
+    }
+
+
+@router.get("/strava/callback")
+def callback(code: str):
+    print("\n--- STRAVA CALLBACK ---")
+
+    token_url = "https://www.strava.com/oauth/token"
+
+    response = requests.post(token_url, data={
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code"
+    })
+
+    data = response.json()
+    print("Token response:", data)
+
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    athlete = data.get("athlete")
+
+    if not athlete:
+        print("ERROR: No athlete returned from Strava")
+        return {"error": "no athlete returned"}
+
+    athlete_id = str(athlete.get("id"))
+    print("Saving athlete:", athlete_id)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO athlete_profile (
+            strava_athlete_id,
+            access_token,
+            refresh_token
+        ) VALUES (?, ?, ?)
+    """, (athlete_id, access_token, refresh_token))
+
+    conn.commit()
+    conn.close()
+
+    print("SUCCESS: Athlete stored")
+
+    return {
+        "status": "connected",
+        "athlete_id": athlete_id
+    }
+
+
+# =========================
+# WEBHOOK VERIFICATION (GET)
+# =========================
+
 @router.get("/strava/webhook")
 def verify(request: Request):
     params = dict(request.query_params)
 
     if "hub.challenge" in params:
+        print("Webhook verified by Strava")
         return {"hub.challenge": params["hub.challenge"]}
 
     return {"status": "ok"}
 
 
-# ---- WEBHOOK EVENTS (POST) ----
+# =========================
+# WEBHOOK EVENTS (POST)
+# =========================
+
 @router.post("/strava/webhook")
 async def strava_webhook(request: Request):
     try:
         payload = await request.json()
+
         print("\n--- WEBHOOK RECEIVED ---")
         print(payload)
 
-        # Step 1: Validate type
+        # Validate event type
         if payload.get("object_type") != "activity":
-            print("IGNORED: not an activity")
+            print("IGNORED: Not an activity")
             return {"status": "ignored"}
 
         activity_id = payload.get("object_id")
-        athlete_id = payload.get("owner_id")
+        athlete_id = str(payload.get("owner_id"))
         aspect_type = payload.get("aspect_type")
 
         print(f"Activity ID: {activity_id}")
         print(f"Athlete ID: {athlete_id}")
         print(f"Aspect Type: {aspect_type}")
 
-        # Step 2: DB lookup
+        # DB lookup
         conn = get_connection()
         cur = conn.cursor()
 
@@ -48,7 +129,7 @@ async def strava_webhook(request: Request):
             SELECT access_token
             FROM athlete_profile
             WHERE strava_athlete_id = ?
-        """, (str(athlete_id),))
+        """, (athlete_id,))
 
         row = cur.fetchone()
 
@@ -59,7 +140,7 @@ async def strava_webhook(request: Request):
         access_token = row[0]
         print("Access token found")
 
-        # Step 3: Fetch activity from Strava
+        # Fetch activity
         headers = {"Authorization": f"Bearer {access_token}"}
 
         print("Fetching activity from Strava API...")
@@ -81,7 +162,7 @@ async def strava_webhook(request: Request):
         print("Activity fetched:")
         print(activity.get("name"), activity.get("sport_type"))
 
-        # Step 4: Store in DB
+        # Store in DB
         print("Storing activity in DB...")
 
         cur.execute("""
@@ -96,7 +177,7 @@ async def strava_webhook(request: Request):
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             str(activity_id),
-            str(athlete_id),
+            athlete_id,
             activity.get("name"),
             activity.get("distance"),
             activity.get("moving_time"),

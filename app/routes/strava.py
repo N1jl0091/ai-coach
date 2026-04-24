@@ -71,7 +71,6 @@ def callback(code: str):
     conn.commit()
     conn.close()
     
-	print("DB PATH:", DB_PATH)	
     print("SUCCESS: Athlete stored")
 
     return {
@@ -92,8 +91,6 @@ def verify(request: Request):
         print("Webhook verified by Strava")
         return {"hub.challenge": params["hub.challenge"]}
         
-    print("DB PATH:", DB_PATH)
-
     return {"status": "ok"}
 
 

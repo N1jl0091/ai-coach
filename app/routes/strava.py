@@ -29,31 +29,42 @@ def login():
 
 
 # 2. OAuth callback
+
 @router.get("/strava/callback")
 def callback(code: str):
-    token_url = "https://www.strava.com/oauth/token"
-
-    response = requests.post(token_url, data={
+    res = requests.post("https://www.strava.com/oauth/token", data={
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
         "code": code,
         "grant_type": "authorization_code"
     })
 
-    data = response.json()
+    data = res.json()
 
     if "access_token" not in data:
-        return {
-            "status": "error",
-            "message": "Strava authentication failed",
-            "details": data
-        }
+        return {"error": "auth_failed", "details": data}
 
-    athlete = data.get("athlete", {})
+    athlete = data["athlete"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO athlete_profile (
+            strava_athlete_id,
+            access_token,
+            refresh_token
+        ) VALUES (?, ?, ?)
+    """, (
+        str(athlete["id"]),
+        data["access_token"],
+        data["refresh_token"]
+    ))
+
+    conn.commit()
+    conn.close()
 
     return {
-        "status": "connected",
-        "athlete_id": athlete.get("id"),
-        "access_token": data.get("access_token"),
-        "refresh_token": data.get("refresh_token"),
+        "status": "stored",
+        "athlete_id": athlete["id"]
     }

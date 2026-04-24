@@ -196,15 +196,3 @@ async def strava_webhook(request: Request):
         print("FATAL ERROR:", str(e))
         return {"error": "internal failure"}
         
-        
-    @router.get("/debug/athletes")
-def debug_athletes():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM athlete_profile")
-    rows = cur.fetchall()
-
-    conn.close()
-
-    return {"athletes": rows}

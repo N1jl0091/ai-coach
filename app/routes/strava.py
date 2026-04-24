@@ -70,7 +70,8 @@ def callback(code: str):
 
     conn.commit()
     conn.close()
-
+    
+	print("DB PATH:", DB_PATH)	
     print("SUCCESS: Athlete stored")
 
     return {
@@ -90,6 +91,8 @@ def verify(request: Request):
     if "hub.challenge" in params:
         print("Webhook verified by Strava")
         return {"hub.challenge": params["hub.challenge"]}
+        
+    print("DB PATH:", DB_PATH)
 
     return {"status": "ok"}
 
@@ -191,6 +194,13 @@ async def strava_webhook(request: Request):
         print("SUCCESS: Activity stored")
 
         return {"status": "stored", "activity_id": activity_id}
+        
+@router.get("/debug/athletes")
+def debug():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT strava_athlete_id FROM athlete_profile")
+    return cur.fetchall()
 
     except Exception as e:
         print("FATAL ERROR:", str(e))

@@ -140,7 +140,52 @@ async def strava_webhook(request: Request):
     except Exception as e:
         print("FATAL ERROR:", str(e))
         return {"error": str(e)}
-    
+
+@router.get("/strava/callback")
+def callback(code: str):
+
+    token_url = "https://www.strava.com/oauth/token"
+
+    res = requests.post(token_url, data={
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code"
+    })
+
+    token_data = res.json()
+
+    access_token = token_data["access_token"]
+    refresh_token = token_data["refresh_token"]
+    athlete = token_data["athlete"]
+
+    strava_athlete_id = athlete["id"]
+
+    print("OAuth success for athlete:", strava_athlete_id)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO athlete_profile (
+            strava_athlete_id,
+            access_token,
+            refresh_token
+        ) VALUES (?, ?, ?)
+    """, (
+        str(strava_athlete_id),
+        access_token,
+        refresh_token
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "connected",
+        "athlete_id": strava_athlete_id
+    }
+
 @router.get("/debug/activities")
 def debug_activities():
     conn = get_connection()

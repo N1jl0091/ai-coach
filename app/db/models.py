@@ -4,7 +4,6 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Athlete identity table
     cur.execute("""
     CREATE TABLE IF NOT EXISTS athlete_profile (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,7 +14,6 @@ def init_db():
     )
     """)
 
-    # Training log (THIS IS WHAT YOU WERE MISSING)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS training_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -4,10 +4,28 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
+    # Athlete identity table
     cur.execute("""
     CREATE TABLE IF NOT EXISTS athlete_profile (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telegram_id TEXT UNIQUE,
+        strava_athlete_id TEXT UNIQUE,
+        access_token TEXT,
+        refresh_token TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Training log (THIS IS WHAT YOU WERE MISSING)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS training_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        strava_activity_id TEXT UNIQUE,
+        athlete_id TEXT,
+        name TEXT,
+        distance REAL,
+        moving_time INTEGER,
+        sport_type TEXT,
+        start_date TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)

@@ -1,205 +1,173 @@
 from fastapi import APIRouter, Request
 import requests
-import os
+import json
+import logging
 
 from app.db.database import get_connection
 
 router = APIRouter()
 
-# ---- CONFIG ----
-CLIENT_ID = os.getenv("STRAVA_CLIENT_ID")
-CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
-REDIRECT_URI = "https://ai-coach-production-06db.up.railway.app/strava/callback"
+logging.basicConfig(level=logging.INFO)
 
 
-# =========================
-# STRAVA OAUTH
-# =========================
-
+# ---------------------------
+# STRAVA LOGIN
+# ---------------------------
 @router.get("/strava/login")
 def login():
+    client_id = "167015"
+
     return {
         "url": (
-            f"https://www.strava.com/oauth/authorize"
-            f"?client_id={CLIENT_ID}"
-            f"&response_type=code"
-            f"&redirect_uri={REDIRECT_URI}"
-            f"&approval_prompt=force"
-            f"&scope=read,activity:read"
+            "https://www.strava.com/oauth/authorize"
+            f"?client_id={client_id}"
+            "&response_type=code"
+            "&redirect_uri=https://ai-coach-production-06db.up.railway.app/strava/callback"
+            "&approval_prompt=force"
+            "&scope=read,activity:read_all"
         )
     }
 
 
+# ---------------------------
+# STRAVA CALLBACK (IMPORTANT FIX)
+# ---------------------------
 @router.get("/strava/callback")
 def callback(code: str):
-    print("\n--- STRAVA CALLBACK ---")
-
     token_url = "https://www.strava.com/oauth/token"
 
-    response = requests.post(token_url, data={
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
+    res = requests.post(token_url, data={
+        "client_id": "167015",
+        "client_secret": "YOUR_CLIENT_SECRET",
         "code": code,
         "grant_type": "authorization_code"
     })
 
-    data = response.json()
-    print("Token response:", data)
+    data = res.json()
 
-    access_token = data.get("access_token")
-    refresh_token = data.get("refresh_token")
-    athlete = data.get("athlete")
-
-    if not athlete:
-        print("ERROR: No athlete returned from Strava")
-        return {"error": "no athlete returned"}
-
-    athlete_id = str(athlete.get("id"))
-    print("Saving athlete:", athlete_id)
+    athlete_id = data["athlete"]["id"]
 
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT OR REPLACE INTO athlete_profile (
-            strava_athlete_id,
-            access_token,
-            refresh_token
-        ) VALUES (?, ?, ?)
-    """, (athlete_id, access_token, refresh_token))
+        INSERT OR REPLACE INTO athlete_profile
+        (strava_athlete_id, access_token, refresh_token)
+        VALUES (?, ?, ?)
+    """, (
+        str(athlete_id),
+        data["access_token"],
+        data["refresh_token"]
+    ))
 
     conn.commit()
     conn.close()
-    
-    print("SUCCESS: Athlete stored")
 
-    return {
-        "status": "connected",
-        "athlete_id": athlete_id
-    }
+    logging.info(f"Stored athlete {athlete_id}")
+
+    return {"status": "ok"}
 
 
-# =========================
-# WEBHOOK VERIFICATION (GET)
-# =========================
-
+# ---------------------------
+# WEBHOOK VERIFY (Strava requirement)
+# ---------------------------
 @router.get("/strava/webhook")
 def verify(request: Request):
     params = dict(request.query_params)
 
     if "hub.challenge" in params:
-        print("Webhook verified by Strava")
         return {"hub.challenge": params["hub.challenge"]}
-        
+
     return {"status": "ok"}
 
 
-# =========================
-# WEBHOOK EVENTS (POST)
-# =========================
-
+# ---------------------------
+# WEBHOOK INGESTION (CORE SYSTEM)
+# ---------------------------
 @router.post("/strava/webhook")
-async def strava_webhook(request: Request):
-    try:
-        payload = await request.json()
+async def webhook(request: Request):
 
-        print("\n--- WEBHOOK RECEIVED ---")
-        print(payload)
+    payload = await request.json()
 
-        # Validate event type
-        if payload.get("object_type") != "activity":
-            print("IGNORED: Not an activity")
-            return {"status": "ignored"}
+    logging.info(f"WEBHOOK: {json.dumps(payload)}")
 
-        activity_id = payload.get("object_id")
-        athlete_id = str(payload.get("owner_id"))
-        aspect_type = payload.get("aspect_type")
+    if payload.get("object_type") != "activity":
+        return {"status": "ignored"}
 
-        print(f"Activity ID: {activity_id}")
-        print(f"Athlete ID: {athlete_id}")
-        print(f"Aspect Type: {aspect_type}")
+    activity_id = payload["object_id"]
+    athlete_id = payload["owner_id"]
 
-        # DB lookup
-        conn = get_connection()
-        cur = conn.cursor()
-
-        print("Looking up athlete in DB...")
-
-        cur.execute("""
-            SELECT access_token
-            FROM athlete_profile
-            WHERE strava_athlete_id = ?
-        """, (athlete_id,))
-
-        row = cur.fetchone()
-
-        if not row:
-            print("ERROR: Athlete not found in DB")
-            return {"error": "athlete not found"}
-
-        access_token = row[0]
-        print("Access token found")
-
-        # Fetch activity
-        headers = {"Authorization": f"Bearer {access_token}"}
-
-        print("Fetching activity from Strava API...")
-
-        r = requests.get(
-            f"https://www.strava.com/api/v3/activities/{activity_id}",
-            headers=headers
-        )
-
-        print(f"Strava response status: {r.status_code}")
-
-        if r.status_code != 200:
-            print("ERROR: Failed to fetch activity")
-            print(r.text)
-            return {"error": "strava fetch failed"}
-
-        activity = r.json()
-
-        print("Activity fetched:")
-        print(activity.get("name"), activity.get("sport_type"))
-
-        # Store in DB
-        print("Storing activity in DB...")
-
-        cur.execute("""
-            INSERT OR REPLACE INTO training_log (
-                strava_activity_id,
-                athlete_id,
-                name,
-                distance,
-                moving_time,
-                sport_type,
-                start_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            str(activity_id),
-            athlete_id,
-            activity.get("name"),
-            activity.get("distance"),
-            activity.get("moving_time"),
-            activity.get("sport_type"),
-            activity.get("start_date")
-        ))
-
-        conn.commit()
-        conn.close()
-
-        print("SUCCESS: Activity stored")
-
-        return {"status": "stored", "activity_id": activity_id}
-        
-@router.get("/debug/athletes")
-def debug():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT strava_athlete_id FROM athlete_profile")
-    return cur.fetchall()
 
-    except Exception as e:
-        print("FATAL ERROR:", str(e))
-        return {"error": "internal failure"}
+    # ---------------------------
+    # 1. GET ATHLETE TOKEN
+    # ---------------------------
+    cur.execute("""
+        SELECT access_token
+        FROM athlete_profile
+        WHERE strava_athlete_id = ?
+    """, (str(athlete_id),))
+
+    row = cur.fetchone()
+
+    if not row:
+        logging.error("Athlete not found")
+        return {"error": "athlete not found"}
+
+    access_token = row["access_token"]
+
+    # ---------------------------
+    # 2. FETCH FULL ACTIVITY
+    # ---------------------------
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    r = requests.get(
+        f"https://www.strava.com/api/v3/activities/{activity_id}",
+        headers=headers
+    )
+
+    if r.status_code != 200:
+        logging.error(r.text)
+        return {"error": "failed to fetch activity"}
+
+    activity = r.json()
+
+    # ---------------------------
+    # 3. STORE ACTIVITY (FULL RAW JSON INCLUDED)
+    # ---------------------------
+    cur.execute("""
+        INSERT OR REPLACE INTO activities (
+            strava_activity_id,
+            athlete_id,
+            name,
+            type,
+            distance,
+            moving_time,
+            start_date,
+            average_speed,
+            average_heartrate,
+            average_watts,
+            raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(activity_id),
+        str(athlete_id),
+        activity.get("name"),
+        activity.get("type"),
+        activity.get("distance"),
+        activity.get("moving_time"),
+        activity.get("start_date"),
+        activity.get("average_speed"),
+        activity.get("average_heartrate"),
+        activity.get("average_watts"),
+        json.dumps(activity)
+    ))
+
+    conn.commit()
+    conn.close()
+
+    logging.info(f"Stored activity {activity_id}")
+
+    return {"status": "stored"}
         

@@ -135,3 +135,19 @@ async def strava_webhook(request: Request):
         "status": "stored",
         "activity_id": activity_id
     }
+
+from fastapi import Request, APIRouter
+
+router = APIRouter()
+
+
+# REQUIRED: webhook verification (Strava handshake)
+@router.get("/strava/webhook")
+def verify(request: Request):
+    params = dict(request.query_params)
+
+    # Strava sends this during verification
+    if "hub.challenge" in params:
+        return {"hub.challenge": params["hub.challenge"]}
+
+    return {"status": "ok"}

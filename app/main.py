@@ -8,3 +8,5 @@ app.include_router(health_router)
 @app.get("/")
 def root():
     return {"status": "ok"}
+
+
